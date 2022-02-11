@@ -1,0 +1,269 @@
+﻿FUNCTION_BLOCK "EVsPantalo"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR_INPUT 
+      eOpen : Array[1..#NUM_EVs] of Bool;
+      eClose : Array[1..#NUM_EVs] of Bool;
+      Nlinia : Int := 1;
+      psEnaAuto : Bool;
+      psEnaManual : Bool;
+      psResetAlarm : Bool;
+      firstScan : Bool;
+      bSysOk : Bool;
+      tmp_alarma : Time;
+      tmp_moviment : Time;
+   END_VAR
+
+   VAR_OUTPUT 
+      aOpen : Array[1..#NUM_EVs] of Bool;
+      bOpen : Array[1..#NUM_EVs] of Bool;
+      bClose : Array[1..#NUM_EVs] of Bool;
+      al_linia : Bool;
+      err_linia : Bool;
+      al_Manual : Bool;
+      al_Open : Array[1..#NUM_EVs] of Bool;
+      al_Open_Grl : Bool;
+      al_Close : Array[1..#NUM_EVs] of Bool;
+      al_Close_Grl : Bool;
+      al_NCicle : Bool;
+      b_NumCicle : Int;
+      err_bOpen : Array[1..#NUM_EVs] of Bool;
+      err_bClose : Array[1..#NUM_EVs] of Bool;
+      Ready : Bool;
+   END_VAR
+
+   VAR 
+      timers_OpenAlarm {InstructionName := 'IEC_TIMER'; LibVersion := '1.0'; S7_SetPoint := 'False'} : Array[1..#NUM_EVs] of IEC_TIMER;
+      timers_CloseAlarm {InstructionName := 'IEC_TIMER'; LibVersion := '1.0'} : Array[1..#NUM_EVs] of IEC_TIMER;
+      timers_EV {InstructionName := 'IEC_TIMER'; LibVersion := '1.0'} : Array[1..#NUM_EVs] of IEC_TIMER;
+      timer_liniaAlarm {InstructionName := 'IEC_TIMER'; LibVersion := '1.0'} : IEC_TIMER;
+      aux_alarma { S7_SetPoint := 'True'} : Array[1..#NUM_EVs] of Bool;
+      data { S7_SetPoint := 'False'} : "HMI_oPantalo";
+      Nlinia_act { S7_SetPoint := 'True'} : Int;
+      Nlinia_consigna { S7_SetPoint := 'True'} : Int;
+      bEV_act { S7_SetPoint := 'True'} : Array[1..#NUM_EVs] of Bool;
+      bEV_consigna { S7_SetPoint := 'True'} : Array[1..#NUM_EVs] of Bool;
+      aux_t1 { S7_SetPoint := 'True'} : Array[1..#NUM_EVs] of Bool;
+   END_VAR
+
+   VAR_TEMP 
+      i : Int;
+      _ModeAutomatic : Bool;
+      _ModeManual : Bool;
+      bOpen_Ok : Bool;
+      bClose_Ok : Bool;
+      _NLinia : Int;
+      _NLinia_aux : Int;
+   END_VAR
+
+   VAR CONSTANT 
+      STATUS_OBJ_ERR : Int := 10;
+      STATUS_OBJ_WARNING : Int := 11;
+      STATUS_OBJ_ON : Int := 1;
+      STATUS_OBJ_OFF : Int := 0;
+      STATUS_OBJ_UNKNOWN : Int := -1;
+      STATUS : Bool;
+      NUM_EVs : Int := 2;
+   END_VAR
+
+
+BEGIN
+	REGION First Scan
+	    IF NOT #firstScan AND #bSysOk THEN
+	        FOR #i := 1 TO #NUM_EVs DO
+	            #aux_alarma[#i] := true;
+	            
+	        END_FOR;
+	    ELSE
+	        FOR #i := 1 TO #NUM_EVs DO
+	            #aux_alarma[#i] := false;
+	            #aux_t1[#i] := false;
+	        END_FOR;
+	    END_IF;
+	    
+	END_REGION
+	
+	REGION Inicialitzar
+	    #Ready := false;
+	    
+	    REGION Màxim i mínim
+	        IF #Nlinia < 1 THEN
+	            #Nlinia_consigna := 1;
+	        ELSIF #Nlinia > (#NUM_EVs + 1) THEN
+	            #Nlinia_consigna := #NUM_EVs + 1;
+	        ELSE
+	            #Nlinia_consigna := #Nlinia;
+	        END_IF;
+	    END_REGION 
+	    
+	    REGION Comprobar numero de linia actual
+	        #Nlinia_act := 1;
+	        FOR #i := 1 TO #NUM_EVs DO
+	            IF #bOpen[#i] THEN
+	                #Nlinia_act += 1;
+	            END_IF;
+	        END_FOR;
+	        
+	        #b_NumCicle := #Nlinia_act;
+	    END_REGION
+	    
+	    REGION Construcció Array bEV_Consigna
+	        FOR #i := 1 TO #NUM_EVs DO
+	            #bEV_consigna[#i] := false;
+	        END_FOR;
+	        
+	        IF #Nlinia_consigna = 1 THEN
+	            FOR #i := 1 TO #NUM_EVs DO
+	                #bEV_consigna[#i] := false;
+	            END_FOR;
+	        ELSIF #Nlinia_consigna > 1 THEN
+	            FOR #i := 1 TO (#Nlinia_consigna - 1) DO
+	                #bEV_consigna[#i] := true;
+	            END_FOR;
+	        END_IF;
+	        
+	    END_REGION
+	    
+	    #bOpen := #aOpen;
+	    FOR #i := 1 TO #NUM_EVs DO
+	        #bClose[#i] := NOT #bOpen[#i];
+	    END_FOR;
+	    
+	    
+	END_REGION
+	
+	REGION Escollir mode de funcionament
+	    
+	    IF #psEnaAuto AND NOT #psEnaManual THEN
+	        #_ModeAutomatic := true;
+	        #_ModeManual := false;
+	    ELSE
+	        #_ModeAutomatic := false;
+	    END_IF;
+	    
+	    IF #psEnaManual THEN
+	        #_ModeManual := true;
+	        #_ModeAutomatic := true;
+	        
+	        #al_Manual := true;
+	    ELSE
+	        #al_Manual := false;
+	    END_IF;
+	    
+	END_REGION
+	
+	REGION inicialitzar EV en Mode Automàtic
+	    IF #_ModeAutomatic AND #bSysOk THEN
+	        FOR #i := 1 TO #NUM_EVs DO
+	            IF #bEV_consigna[#i] <> #bOpen[#i] THEN
+	                #timers_EV[#i].TON(IN := #aux_t1[#i],
+	                                   PT := #tmp_moviment);
+	                IF #timers_EV[#i].Q THEN
+	                    #aOpen[#i] := #bEV_consigna[#i];
+	                END_IF;
+	                
+	                #aux_t1[#i] := true;
+	                EXIT;
+	            ELSE
+	                #aux_t1[#i] := FALSE;
+	            END_IF;
+	        END_FOR;
+	        
+	    END_IF;
+	    
+	END_REGION
+	
+	REGION Alarmes
+	    
+	    REGION bit Estat Open
+	        
+	        FOR #i := 1 TO #NUM_EVs DO
+	            #err_bOpen[#i] := #aOpen[#i] AND ((NOT #eOpen[#i]) OR #eClose[#i]);
+	        END_FOR;
+	        
+	    END_REGION
+	
+	    REGION bit Estat Close
+	        
+	        FOR #i := 1 TO #NUM_EVs DO
+	            #err_bClose[#i] := (NOT #aOpen[#i]) AND (#eOpen[#i] OR (NOT #eClose[#i]));
+	        END_FOR;
+	        
+	    END_REGION
+	    
+	    REGION bit Ready
+	        IF #Nlinia_act = #Nlinia_consigna THEN
+	            #Ready := true;
+	        ELSE
+	            #Ready := false;
+	        END_IF;
+	    END_REGION
+	
+	    
+	    REGION Alarmes Open i Close i Linia
+	        FOR #i := 1 TO #NUM_EVs DO
+	            #timers_OpenAlarm[#i].TON(IN := #err_bOpen[#i],
+	                                      PT := #tmp_alarma);
+	            #al_Open[#i] := #timers_OpenAlarm[#i].Q;
+	            
+	            
+	            #timers_CloseAlarm[#i].TON(IN := #err_bClose[#i],
+	                                       PT := #tmp_alarma);
+	            #al_Close[#i] := #timers_CloseAlarm[#i].Q;
+	            
+	            
+	            #timer_liniaAlarm.TON(IN := #err_linia,
+	                                  PT := #tmp_alarma);
+	            #al_linia := #timer_liniaAlarm.Q;
+	        END_FOR;
+	        
+	    END_REGION
+	    
+	
+	    
+	
+	END_REGION
+	    
+	//     REGION Reset Alarmes
+	//         IF #psResetAlarm THEN
+	//             #al_Open_Grl := false;
+	//             #al_Close_Grl := false;
+	            
+	//             #al_Manual := false;
+	//             #al_NCicle := false;
+	            
+	//             FOR #i:=1 TO #NUM_EVs DO
+	//                 #al_Open[#i] := false;
+	//                 #al_Close[#i] := false;
+	//             END_FOR;
+	//         END_IF;
+	//     END_REGION
+	    
+	// END_REGION
+	
+	// REGION Estat Pantalo HMI
+	//     IF #al_Close_Grl OR #al_Open_Grl THEN
+	//         #data.iStatusDisplay := #STATUS_OBJ_ERR;
+	//         #data.bDisplayError := true;
+	//         #data.bDisplayWarning := false;
+	//         #data.bDisplayOk := false;
+	        
+	//     ELSIF NOT #bOpen_Ok OR NOT #bClose_Ok THEN
+	//         #data.iStatusDisplay := #STATUS_OBJ_WARNING;
+	//         #data.bDisplayError := false;
+	//         #data.bDisplayWarning := true;
+	//         #data.bDisplayOk := false;
+	        
+	//     ELSE
+	//         #data.iStatusDisplay := #STATUS_OBJ_ON;
+	//         #data.bDisplayError := false;
+	//         #data.bDisplayWarning := false;
+	//         #data.bDisplayOk := true;
+	        
+	//     END_IF;
+	// END_REGION
+	// 
+	
+	
+END_FUNCTION_BLOCK
+
